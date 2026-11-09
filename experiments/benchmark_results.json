@@ -1,0 +1,114 @@
+{
+  "models": {
+    "xgboost": {
+      "model_name": "XGBoost Classifier (Selected / Production)",
+      "recorded_at": null,
+      "source": "User-provided benchmark metrics",
+      "selection_note": "Sınıf dengesizliğini en iyi yöneten, en yüksek ROC-AUC ve dengeli TN/TP oranıyla canlı servise alınan model.",
+      "metadata": {
+        "status": "selected_production"
+      },
+      "metrics": {
+        "roc_auc": 0.7525,
+        "pr_auc": 0.9865,
+        "f1": 0.8867,
+        "accuracy": 0.8006,
+        "confusion_matrix": null
+      }
+    },
+    "logistic_regression": {
+      "model_name": "Logistic Regression (Baseline)",
+      "recorded_at": null,
+      "source": "User-reported baseline run; detailed metrics pending rerun with tracking enabled",
+      "metadata": {},
+      "metrics": {
+        "roc_auc": 0.7033,
+        "pr_auc": null,
+        "f1": null,
+        "accuracy": 0.698,
+        "confusion_matrix": null
+      }
+    },
+    "lightgbm": {
+      "model_name": "LightGBM (class_weight=balanced)",
+      "recorded_at": "2026-11-09T16:46:41+03:00",
+      "metadata": {
+        "snapshot_date": "2018-03-04",
+        "horizon_days": 180,
+        "min_historical_orders": 2,
+        "total_rows": 1753,
+        "train_rows": 1402,
+        "test_rows": 351,
+        "class_counts": {
+          "1": 1681,
+          "0": 72
+        },
+        "features": [
+          "recency_days",
+          "frequency",
+          "monetary",
+          "avg_item_price",
+          "avg_review_score"
+        ],
+        "class_weight": "balanced"
+      },
+      "metrics": {
+        "roc_auc": 0.6617210682492581,
+        "pr_auc": 0.9778961520128965,
+        "f1": 0.9613095238095238,
+        "accuracy": 0.9259259259259259,
+        "confusion_matrix": [
+          [
+            2,
+            12
+          ],
+          [
+            14,
+            323
+          ]
+        ]
+      }
+    },
+    "random_forest": {
+      "model_name": "Random Forest (class_weight=balanced)",
+      "recorded_at": "2026-11-09T16:50:27+03:00",
+      "metadata": {
+        "snapshot_date": "2018-03-04",
+        "horizon_days": 180,
+        "min_historical_orders": 2,
+        "total_rows": 1753,
+        "train_rows": 1402,
+        "test_rows": 351,
+        "class_counts": {
+          "1": 1681,
+          "0": 72
+        },
+        "features": [
+          "recency_days",
+          "frequency",
+          "monetary",
+          "avg_item_price",
+          "avg_review_score"
+        ],
+        "class_weight": "balanced",
+        "n_estimators": 100
+      },
+      "metrics": {
+        "roc_auc": 0.6871555743959303,
+        "pr_auc": 0.978543677489926,
+        "f1": 0.9751824817518249,
+        "accuracy": 0.9515669515669516,
+        "confusion_matrix": [
+          [
+            0,
+            14
+          ],
+          [
+            3,
+            334
+          ]
+        ]
+      }
+    }
+  }
+}

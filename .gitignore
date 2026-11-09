@@ -1,0 +1,50 @@
+# Python environments and caches
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.*
+
+# Local datasets, database files and dumps
+data/
+*.pkl
+*.joblib
+*.model
+*.onnx
+*.dump
+*.sql
+*.sql.gz
+*.backup
+*.bak
+*.sqlite
+*.sqlite3
+*.db
+
+# Logs, temporary files and editor/OS metadata
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Streamlit local state
+.streamlit/secrets.toml

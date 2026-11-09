@@ -1,0 +1,1 @@
+"""RetailPulse FastAPI service package."""
