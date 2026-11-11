@@ -1,163 +1,137 @@
-"""Train a temporal 90-day repeat-purchase (churn) classifier from Gold data."""
+"""Train the production churn model from pooled temporal snapshots."""
 
 import sys
 from pathlib import Path
 
 import joblib
 import pandas as pd
-from sklearn.impute import SimpleImputer
-from sklearn.metrics import accuracy_score, average_precision_score, confusion_matrix, f1_score, roc_auc_score
-from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    confusion_matrix,
+    f1_score,
+    roc_auc_score,
+)
+from sklearn.model_selection import GroupShuffleSplit
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "etl"))
+sys.path.insert(0, str(ROOT / "experiments"))
 from extract import connection_settings  # noqa: E402
+from sliding_window_loader import (  # noqa: E402
+    FEATURES,
+    HORIZON_DAYS,
+    MIN_HISTORICAL_ORDERS,
+    SNAPSHOT_DATES,
+    load_window,
+)
 import psycopg  # noqa: E402
 
-FEATURES = [
-    "recency_days",
-    "frequency",
-    "monetary",
-    "avg_item_price",
-    "avg_review_score",
-]
-HORIZON_DAYS = 180
-MIN_HISTORICAL_ORDERS = 2
 MODEL_PATH = ROOT / "models" / "churn_model.joblib"
+RANDOM_STATE = 42
+TEST_SIZE = 0.20
 
 
-def load_training_data():
-    query = """
-        WITH bounds AS (
-            SELECT MAX(order_purchase_timestamp)::date AS max_date
-            FROM gold.fact_orders
-            WHERE order_purchase_timestamp IS NOT NULL
-        ), params AS (
-            SELECT max_date - (%(horizon)s * INTERVAL '1 day') AS snapshot_date,
-                   max_date + INTERVAL '1 day' AS observation_end
-            FROM bounds
-        ), historical AS (
-            SELECT f.*
-            FROM gold.fact_orders AS f
-            CROSS JOIN params AS p
-            WHERE f.order_purchase_timestamp < p.snapshot_date
-              AND f.customer_unique_id IS NOT NULL
-        ), customer_features AS (
-            SELECT h.customer_unique_id,
-                   (p.snapshot_date::date - MAX(h.order_purchase_timestamp)::date)::integer AS recency_days,
-                   COUNT(*)::integer AS frequency,
-                   SUM(h.total_product_amount)::double precision AS monetary
-            FROM historical AS h
-            CROSS JOIN params AS p
-            GROUP BY h.customer_unique_id, p.snapshot_date
-        ), item_features AS (
-            SELECT h.customer_unique_id, AVG(i.price)::double precision AS avg_item_price
-            FROM historical AS h
-            JOIN gold.fact_order_items AS i ON i.order_id = h.order_id
-            GROUP BY h.customer_unique_id
-        ), review_features AS (
-            SELECT h.customer_unique_id, AVG(r.review_score)::double precision AS avg_review_score
-            FROM historical AS h
-            JOIN silver.order_reviews AS r ON r.order_id = h.order_id
-            GROUP BY h.customer_unique_id
-        ), future_repeat AS (
-            SELECT DISTINCT f.customer_unique_id
-            FROM gold.fact_orders AS f
-            CROSS JOIN params AS p
-            WHERE f.order_purchase_timestamp >= p.snapshot_date
-              AND f.order_purchase_timestamp < p.observation_end
-              AND f.customer_unique_id IS NOT NULL
-        )
-        SELECT c.recency_days, c.frequency, c.monetary, i.avg_item_price,
-               v.avg_review_score,
-               CASE WHEN r.customer_unique_id IS NULL THEN 1 ELSE 0 END AS churn
-        FROM customer_features AS c
-        LEFT JOIN item_features AS i USING (customer_unique_id)
-        LEFT JOIN review_features AS v USING (customer_unique_id)
-        LEFT JOIN future_repeat AS r USING (customer_unique_id)
-        WHERE c.frequency >= %(min_frequency)s
-    """
+def load_training_data() -> pd.DataFrame:
+    """Load and pool the three fixed, fully observed 180-day windows."""
     with psycopg.connect(**connection_settings()) as connection:
-        data = pd.read_sql_query(
-            query,
-            connection,
-            params={"horizon": HORIZON_DAYS, "min_frequency": MIN_HISTORICAL_ORDERS},
+        windows = {}
+        for date in SNAPSHOT_DATES:
+            print(f"Loading snapshot {date}...", flush=True)
+            windows[date] = load_window(connection, date)
+
+    for date, data in windows.items():
+        if data.empty:
+            raise RuntimeError(f"Gold tables produced no training examples for snapshot {date}.")
+        print(
+            f"Snapshot {date}: {len(data):,} rows; "
+            f"class counts {{0: {(data['churn'] == 0).sum():,}, 1: {(data['churn'] == 1).sum():,}}}"
         )
-        snapshot = pd.read_sql_query(
-            "SELECT (MAX(order_purchase_timestamp)::date - %s)::date AS snapshot_date FROM gold.fact_orders",
-            connection,
-            params=(HORIZON_DAYS,),
-        ).iloc[0, 0]
-    if data.empty:
-        raise RuntimeError("Gold fact_orders did not produce any supervised churn examples.")
-    data["churn"] = data["churn"].astype(int)
-    return data, snapshot
+    pooled = pd.concat(windows.values(), ignore_index=True)
+    if pooled.empty or pooled["customer_unique_id"].nunique() < 2:
+        raise RuntimeError("At least two distinct customers are required for GroupShuffleSplit.")
+    return pooled
 
 
 def main():
-    data, snapshot_date = load_training_data()
-    counts = data["churn"].value_counts()
-    if len(counts) != 2 or counts.min() < 2:
-        raise RuntimeError(f"Both churn classes need at least two rows; got {counts.to_dict()}")
+    data = load_training_data()
+    splitter = GroupShuffleSplit(n_splits=1, test_size=TEST_SIZE, random_state=RANDOM_STATE)
+    train_idx, test_idx = next(
+        splitter.split(data[FEATURES], data["churn"], groups=data["customer_unique_id"])
+    )
+    train = data.iloc[train_idx]
+    test = data.iloc[test_idx]
 
-    x_train, x_test, y_train, y_test = train_test_split(
-        data[FEATURES],
-        data["churn"],
-        test_size=0.2,
-        random_state=42,
-        stratify=data["churn"],
-    )
-    preprocessor = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-        ]
-    )
-    x_train_scaled = preprocessor.fit_transform(x_train)
-    x_test_scaled = preprocessor.transform(x_test)
+    train_groups = set(train["customer_unique_id"])
+    test_groups = set(test["customer_unique_id"])
+    overlap = train_groups.intersection(test_groups)
+    if overlap:
+        raise RuntimeError(f"Customer leakage detected: {len(overlap)} customers cross splits.")
+
+    scaler = StandardScaler()
+    x_train = scaler.fit_transform(train[FEATURES])
+    x_test = scaler.transform(test[FEATURES])
+    y_train = train["churn"].astype(int)
+    y_test = test["churn"].astype(int)
+
+    # Keep the experimentally validated ratio. It is derived from the pooled
+    # experiment's training class counts (120 negatives / 2,835 positives).
+    scale_pos_weight = 120 / 2835
     model = XGBClassifier(
-        n_estimators=300,
-        max_depth=3,
-        learning_rate=0.04,
-        subsample=0.85,
-        colsample_bytree=0.9,
-        reg_lambda=2.0,
-        scale_pos_weight=float((y_train == 0).sum() / max(1, (y_train == 1).sum())),
+        max_depth=4,
+        learning_rate=0.05,
+        n_estimators=100,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        scale_pos_weight=scale_pos_weight,
+        random_state=RANDOM_STATE,
         eval_metric="logloss",
-        random_state=42,
-        n_jobs=4,
     )
-    model.fit(x_train_scaled, y_train)
-    probabilities = model.predict_proba(x_test_scaled)[:, 1]
-    predictions = (probabilities >= 0.5).astype(int)
-    print(f"Snapshot: {snapshot_date}; churn horizon: {HORIZON_DAYS} days")
-    print(f"Examples: {len(data):,}; churn rate: {data['churn'].mean():.3%}")
-    print(f"Cohort: customers with at least {MIN_HISTORICAL_ORDERS} historical orders; class counts: {counts.to_dict()}")
-    print(f"Train/test: {len(x_train):,}/{len(x_test):,} (80/20 stratified)")
-    print(f"ROC-AUC: {roc_auc_score(y_test, probabilities):.4f}")
-    print(f"PR-AUC (average precision): {average_precision_score(y_test, probabilities):.4f}")
-    print(f"F1: {f1_score(y_test, predictions, zero_division=0):.4f}")
-    print(f"Accuracy: {accuracy_score(y_test, predictions):.4f}")
-    print("Confusion matrix [[TN, FP], [FN, TP]]:")
-    print(confusion_matrix(y_test, predictions, labels=[0, 1]))
+    model.fit(x_train, y_train)
+
+    probabilities = model.predict_proba(x_test)[:, 1]
+    predictions = (probabilities >= 0.50).astype(int)
+    matrix = confusion_matrix(y_test, predictions, labels=[0, 1])
 
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(
         {
             "model": model,
-            "preprocessor": preprocessor,
+            "scaler": scaler,
+            # The API currently calls this key; keep it as a compatibility alias.
+            "preprocessor": scaler,
             "features": FEATURES,
-            "snapshot_date": str(snapshot_date),
+            "snapshot_dates": list(SNAPSHOT_DATES),
             "horizon_days": HORIZON_DAYS,
             "min_historical_orders": MIN_HISTORICAL_ORDERS,
+            "decision_threshold": 0.50,
+            "scale_pos_weight": scale_pos_weight,
+            "train_class_counts": {int(k): int(v) for k, v in y_train.value_counts().items()},
         },
         MODEL_PATH,
     )
-    print(f"Saved model: {MODEL_PATH}")
+
+    print("=" * 68)
+    print("PRODUCTION SLIDING WINDOW · XGBOOST CHURN MODEL")
+    print("=" * 68)
+    print(f"Pooled rows             : {len(data):,}")
+    print(f"Train/test rows         : {len(train):,} / {len(test):,}")
+    print(f"Train/test customers    : {len(train_groups):,} / {len(test_groups):,}")
+    print(f"Customer overlap        : {len(overlap)}")
+    print(f"Train classes (0 / 1)   : {(y_train == 0).sum():,} / {(y_train == 1).sum():,}")
+    print(f"Test classes (0 / 1)    : {(y_test == 0).sum():,} / {(y_test == 1).sum():,}")
+    print(f"scale_pos_weight        : {scale_pos_weight:.6f}")
+    print("Decision threshold     : 0.50")
+    print(f"ROC-AUC                 : {roc_auc_score(y_test, probabilities):.4f}")
+    print(f"PR-AUC                  : {average_precision_score(y_test, probabilities):.4f}")
+    print(f"F1-Score                : {f1_score(y_test, predictions, zero_division=0):.4f}")
+    print(f"Accuracy                : {accuracy_score(y_test, predictions):.4f}")
+    print("Confusion Matrix        : [[TN, FP], [FN, TP]]")
+    print(matrix)
+    print(f"Saved production bundle : {MODEL_PATH}")
 
 
 if __name__ == "__main__":

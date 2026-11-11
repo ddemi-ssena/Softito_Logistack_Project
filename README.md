@@ -51,12 +51,25 @@ graph TD
 ### Machine learning
 
 - K-Means based RFM customer segmentation, with business labels such as **Champions**, **Loyal**, **At Risk**, and **Hibernating**.
-- An XGBoost churn inference pipeline served by FastAPI.
-- Model experiments compare Logistic Regression, Random Forest, LightGBM, and XGBoost. XGBoost is selected for production with ROC-AUC **0.7525**, PR-AUC **0.9865**, F1 **0.8867**, and accuracy **0.8006**. Selection note: “Sınıf dengesizliğini en iyi yöneten, en yüksek ROC-AUC ve dengeli TN/TP oranıyla canlı servise alınan model.” See [`experiments/benchmark_results.md`](experiments/benchmark_results.md) and [`experiments/`](experiments/) for experiment scripts and details.
+- An XGBoost churn inference pipeline served by FastAPI. Production training pools three 180-day snapshots (2017-10-01, 2017-12-15, and 2018-03-04). A single snapshot provided too few minority-class examples and could not represent seasonal variation; temporal pooling increased the cohort from 1,753 to 3,678 rows.
+- `GroupShuffleSplit` partitions by `customer_unique_id`, so a customer's records cannot appear in both train and test (Customer Overlap: **0**). The scaler is fitted on training rows only.
+- Model experiments compare Logistic Regression, Random Forest, LightGBM, and XGBoost. The sliding-window XGBoost model is selected for production. See [`experiments/benchmark_results.md`](experiments/benchmark_results.md) and [`experiments/`](experiments/) for experiment scripts and details.
+
+| Tek Snapshot vs. Sliding Window | Tek Snapshot | Sliding Window |
+| --- | ---: | ---: |
+| Toplam veri hacmi | 1,753 | 3,678 |
+| Test seti boyutu | 351 | 723 |
+| Test azınlık sınıfı (TN + FP) | 14 | 39 |
+| Doğru yakalanan TN | 7 (%50.0) | 20 (%51.3) |
+| Accuracy | %80.06 | %82.30 |
+| F1-Score | 0.8867 | 0.8998 |
+| ROC-AUC | 0.7525 | 0.7398 |
+
+Sliding Window ROC-AUC is slightly lower on the expanded test pool, which provides a more realistic and robust generalization evaluation across multiple temporal cohorts.
 
 | Model | ROC-AUC | PR-AUC | F1 | Accuracy | Status |
 | --- | ---: | ---: | ---: | ---: | --- |
-| **XGBoost Classifier** | **0.7525** | **0.9865** | 0.8867 | 0.8006 | **Selected / Production** |
+| **XGBoost (Sliding Window)** | **0.7398** | **0.9781** | 0.8998 | 0.8230 | **Sliding Window (Production)** |
 | Logistic Regression (Baseline) | 0.7033 | — | — | 0.6980 | Baseline |
 | Random Forest (class_weight=balanced) | 0.6872 | 0.9785 | 0.9752 | 0.9516 | Compared |
 | LightGBM (class_weight=balanced) | 0.6617 | 0.9779 | 0.9613 | 0.9259 | Compared |
