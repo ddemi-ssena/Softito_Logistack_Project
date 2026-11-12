@@ -69,6 +69,8 @@ K-Means with **k=4** was applied to **93,106 valid customers** using Recency, Fr
 
 ### Machine learning
 
+The model experiments and RFM segmentation code are maintained as a standalone research package in the [Logistack ML Research repository](https://github.com/ddemi-ssena/Softito_Logistack_ML) (create the GitHub repository with this name to activate the link). It documents its PostgreSQL Gold/Silver data contract, setup, experiment commands, metrics, and report figures.
+
 - K-Means based RFM customer segmentation, with business labels such as **Champions**, **Loyal**, **At Risk**, and **Hibernating**.
 - An XGBoost churn inference pipeline served by FastAPI. Production training pools three 180-day snapshots (2017-10-01, 2017-12-15, and 2018-03-04). A single snapshot provided too few minority-class examples and could not represent seasonal variation; temporal pooling increased the cohort from 1,753 to 3,678 rows.
 - `GroupShuffleSplit` partitions by `customer_unique_id`, so a customer's records cannot appear in both train and test (Customer Overlap: **0**). The scaler is fitted on training rows only.
