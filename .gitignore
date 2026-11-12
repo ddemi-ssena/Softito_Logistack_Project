@@ -35,6 +35,9 @@ data/
 *.sqlite3
 *.db
 
+# Keep submitted project reports under docs tracked by Git.
+!docs/*.pdf
+
 # Logs, temporary files and editor/OS metadata
 *.log
 *.tmp
